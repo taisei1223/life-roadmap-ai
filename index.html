@@ -2,31 +2,151 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#6d5dfc">
+  <meta name="description" content="人生の目標を記録するロードマップ">
   <title>人生ロードマップ</title>
   <style>
-    :root{color-scheme:light;font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif}
-    *{box-sizing:border-box}body{margin:0;background:#f6f7fb;color:#24243a}
-    header{padding:24px 20px 18px;background:linear-gradient(135deg,#6d5dfc,#9b84ff);color:white}
-    h1{font-size:22px;margin:0 0 6px}.sub{font-size:13px;opacity:.9}
-    main{max-width:680px;margin:auto;padding:16px}section{background:white;border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 4px 18px rgba(40,36,90,.08)}
-    h2{font-size:16px;margin:0 0 12px}.row{display:flex;gap:8px}.row input{flex:1}.add{width:44px;border:0;border-radius:10px;background:#6d5dfc;color:white;font-size:22px}
-    input{border:1px solid #ddddea;border-radius:10px;padding:12px;font-size:14px}ul{list:0;padding:0;margin:12px 0 0}li{list-style:none;padding:10px 8px;border-bottom:1px solid #eee}.empty{color:#9292a3;font-size:13px;text-align:center;padding:12px}
+    :root{font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;color:#24243a;background:#f6f7fb;font-synthesis:none}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh}header{padding:24px 20px 18px;background:linear-gradient(135deg,#6d5dfc,#9b84ff);color:#fff;padding-top:calc(24px + env(safe-area-inset-top))}
+    h1{font-size:22px;margin:0 0 6px}.sub{font-size:13px;opacity:.92}main{max-width:680px;margin:auto;padding:16px 16px calc(24px + env(safe-area-inset-bottom))}
+    section{background:#fff;border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 4px 18px rgba(40,36,90,.08)}h2{font-size:16px;margin:0 0 12px}
+    .row{display:flex;gap:8px}.row input{flex:1;min-width:0}input{width:100%;border:1px solid #ddddea;border-radius:10px;padding:12px;font-size:16px;background:#fff;color:inherit}
+    button{font:inherit;cursor:pointer}.add{width:48px;flex:none;border:0;border-radius:10px;background:#6d5dfc;color:#fff;font-size:24px}.add:disabled{opacity:.5}
+    ul{padding:0;margin:12px 0 0}li{list-style:none;padding:11px 4px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px}.goal-text{flex:1;overflow-wrap:anywhere}.delete{border:0;background:#f2f1fa;color:#625b87;border-radius:8px;padding:7px 10px}.empty,.status{color:#77778a;font-size:13px}.empty{text-align:center;padding:12px}.status{margin-top:10px;min-height:1.3em}.error{color:#b42318}
   </style>
 </head>
 <body>
   <header><h1>人生ロードマップ</h1><div class="sub">今の一歩から、未来を描く</div></header>
   <main>
-    <section><h2>短期目標を追加</h2><div class="row"><input id="goal" placeholder="例：英語で仕事ができるようになる" aria-label="目標"><button class="add" id="add" aria-label="追加">＋</button></div></section>
+    <section><h2>目標を追加</h2><form class="row" id="goal-form"><input id="goal" maxlength="200" placeholder="例：英語で仕事ができるようになる" aria-label="目標" required><button class="add" id="add" aria-label="追加" type="submit">＋</button></form><div class="status" id="status" role="status" aria-live="polite">データベースを準備しています…</div></section>
     <section><h2>ロードマップ</h2><ul id="list"></ul></section>
   </main>
 <script>
-const key='life-roadmap-goals';const list=document.querySelector('#list');const input=document.querySelector('#goal');
-const load=()=>JSON.parse(localStorage.getItem(key)||'[]');
-function render(){const goals=load();list.innerHTML=goals.length?'':'<li class="empty">まだ目標がありません</li>';for(const goal of goals){const li=document.createElement('li');li.textContent='・ '+goal;list.prepend(li)}}
-function add(){const goal=input.value.trim();if(!goal)return;const goals=load();goals.push(goal);localStorage.setItem(key,JSON.stringify(goals));input.value='';render()}
-document.querySelector('#add').addEventListener('click',add);input.addEventListener('keydown',e=>{if(e.key==='Enter')add()});render();
+(() => {
+  'use strict';
+  const DB_NAME = 'life-roadmap-db';
+  const DB_VERSION = 1;
+  const STORE_NAME = 'goals';
+  const LEGACY_KEY = 'life-roadmap-goals';
+  const list = document.querySelector('#list');
+  const input = document.querySelector('#goal');
+  const form = document.querySelector('#goal-form');
+  const status = document.querySelector('#status');
+  const addButton = document.querySelector('#add');
+  let db;
+
+  function openDatabase() {
+    return new Promise((resolve, reject) => {
+      if (!('indexedDB' in window)) {
+        reject(new Error('このブラウザではIndexedDBを利用できません。'));
+        return;
+      }
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(STORE_NAME)) {
+          const store = database.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+          store.createIndex('createdAt', 'createdAt');
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('データベースを開けませんでした。'));
+      request.onblocked = () => reject(new Error('別のタブがデータベースを使用中です。ページを再読み込みしてください。'));
+    });
+  }
+
+  function transactionRequest(mode, action) {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, mode);
+      const request = action(tx.objectStore(STORE_NAME));
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('データベース操作に失敗しました。'));
+      tx.onabort = () => reject(tx.error || new Error('データベースの保存に失敗しました。'));
+    });
+  }
+
+  async function migrateLegacyData() {
+    if (localStorage.getItem(LEGACY_KEY) === null) return;
+    const oldGoals = JSON.parse(localStorage.getItem(LEGACY_KEY) || '[]');
+    if (!Array.isArray(oldGoals)) return;
+    const existing = await transactionRequest('readonly', store => store.count());
+    if (existing === 0 && oldGoals.length) {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        oldGoals.filter(goal => typeof goal === 'string' && goal.trim()).forEach(goal => {
+          store.add({ text: goal.trim(), createdAt: new Date().toISOString() });
+        });
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error('以前の目標を移行できませんでした。'));
+        tx.onabort = () => reject(tx.error || new Error('以前の目標を移行できませんでした。'));
+      });
+    }
+    localStorage.removeItem(LEGACY_KEY);
+  }
+
+  async function render() {
+    const goals = await transactionRequest('readonly', store => store.getAll());
+    list.replaceChildren();
+    if (!goals.length) {
+      const empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = 'まだ目標がありません';
+      list.append(empty);
+      return;
+    }
+    goals.sort((a, b) => b.id - a.id).forEach(goal => {
+      const item = document.createElement('li');
+      const text = document.createElement('span');
+      text.className = 'goal-text';
+      text.textContent = '・ ' + goal.text;
+      const remove = document.createElement('button');
+      remove.className = 'delete';
+      remove.type = 'button';
+      remove.textContent = '削除';
+      remove.setAttribute('aria-label', goal.text + 'を削除');
+      remove.addEventListener('click', async () => {
+        try {
+          await transactionRequest('readwrite', store => store.delete(goal.id));
+          await render();
+          status.textContent = 'IndexedDBから削除しました';
+          status.classList.remove('error');
+        } catch (error) { showError(error); }
+      });
+      item.append(text, remove);
+      list.append(item);
+    });
+  }
+
+  function showError(error) {
+    status.textContent = '保存エラー：' + (error && error.message ? error.message : 'データを保存できませんでした');
+    status.classList.add('error');
+  }
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text || !db) return;
+    addButton.disabled = true;
+    try {
+      await transactionRequest('readwrite', store => store.add({ text, createdAt: new Date().toISOString() }));
+      input.value = '';
+      await render();
+      status.textContent = 'IndexedDBに保存しました';
+      status.classList.remove('error');
+    } catch (error) { showError(error); }
+    finally { addButton.disabled = false; }
+  });
+
+  openDatabase().then(async database => {
+    db = database;
+    db.onversionchange = () => db.close();
+    await migrateLegacyData();
+    await render();
+    status.textContent = 'IndexedDBに接続済みです';
+  }).catch(showError);
+})();
 </script>
 </body>
 </html>
